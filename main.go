@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/dolthub/swiss"
 )
 
 type Result struct {
@@ -40,18 +42,19 @@ func process() string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var result = make([]Result, len(resultMap))
+	var result = make([]Result, resultMap.Count())
 
 	var count int
-	for city, calculated := range resultMap {
+	resultMap.Iter(func(k string, v *Info) (stop bool) {
 		result[count] = Result{
-			city: city,
-			min:  round(float64(calculated.min) / 10.0),
-			max:  round(float64(calculated.max) / 10.0),
-			avg:  round((float64(calculated.sum) / 10.0) / float64(calculated.count)),
+			city: k,
+			min:  round(float64(v.min) / 10.0),
+			max:  round(float64(v.max) / 10.0),
+			avg:  round((float64(v.sum) / 10.0) / float64(v.count)),
 		}
 		count++
-	}
+		return false // continue
+	})
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].city < result[j].city
@@ -59,20 +62,20 @@ func process() string {
 
 	var stringsBuilder strings.Builder
 	for _, i := range result {
-		stringsBuilder.WriteString(fmt.Sprintf("%s=%.1f/%.1f/%.1f, ", i.city, i.min, i.avg, i.max))
+		stringsBuilder.WriteString(fmt.Sprintf("%s=%.1f/%.1f/%.1f, \n", i.city, i.min, i.avg, i.max))
 	}
 	return stringsBuilder.String()[:stringsBuilder.Len()-2]
 }
 
-func readFile(path string) (resultMap map[string]Info, err error) {
-	resultMap = map[string]Info{}
-	resultStream := make(chan map[string]Info, 32)
+func readFile(path string) (resultMap swiss.Map[string, *Info], err error) {
+	resultMap = *swiss.NewMap[string, *Info](1024)
+	resultStream := make(chan swiss.Map[string, *Info], 32)
 	lineStream := make(chan []byte, 64)
 	lineSize := 2048 * 2048
 
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return resultMap, err
 	}
 	defer file.Close()
 
@@ -119,8 +122,8 @@ func readFile(path string) (resultMap map[string]Info, err error) {
 	}()
 
 	for t := range resultStream {
-		for city, tempInfo := range t {
-			if val, ok := resultMap[city]; ok {
+		t.Iter(func(city string, tempInfo *Info) (stop bool) {
+			if val, ok := resultMap.Get(city); ok {
 				val.count += tempInfo.count
 				val.sum += tempInfo.sum
 				if tempInfo.min < val.min {
@@ -130,18 +133,19 @@ func readFile(path string) (resultMap map[string]Info, err error) {
 				if tempInfo.max > val.max {
 					val.max = tempInfo.max
 				}
-				resultMap[city] = val
+				resultMap.Put(city, val)
 			} else {
-				resultMap[city] = tempInfo
+				resultMap.Put(city, tempInfo)
 			}
-		}
+			return false // continue
+		})
 	}
 
 	return resultMap, nil
 }
 
-func readLine(buffer string, resultStream chan<- map[string]Info) {
-	res := make(map[string]Info)
+func readLine(buffer string, resultStream chan<- swiss.Map[string, *Info]) {
+	res := swiss.NewMap[string, *Info](32)
 	var init int
 	var city string
 
@@ -155,7 +159,7 @@ func readLine(buffer string, resultStream chan<- map[string]Info) {
 				temp := toInt(buffer[init:ind])
 				init = ind + 1
 
-				if val, ok := res[city]; ok {
+				if val, ok := res.Get(city); ok {
 					val.count++
 					val.sum += temp
 					if temp < val.min {
@@ -165,21 +169,22 @@ func readLine(buffer string, resultStream chan<- map[string]Info) {
 					if temp > val.max {
 						val.max = temp
 					}
-					res[city] = val
+					res.Put(city, val)
 				} else {
-					res[city] = Info{
+					res.Put(city, &Info{
 						count: 1,
 						min:   temp,
 						max:   temp,
 						sum:   temp,
-					}
+					})
+
 				}
 
 				city = ""
 			}
 		}
 	}
-	resultStream <- res
+	resultStream <- *res
 }
 
 func toInt(input string) (output int64) {
