@@ -8,9 +8,11 @@ import (
 	"log"
 	"math"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dolthub/swiss"
 )
@@ -30,11 +32,20 @@ type Info struct {
 }
 
 func main() {
-	// fo, _ := os.Create("./output.txt")
-	// w := bufio.NewWriter(fo)
-	// w.WriteString(process())
-	// fmt.Println(process())
-	process()
+	f, err := os.Create("./profiles/cpu.prof")
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	if err := pprof.StartCPUProfile(f); err != nil {
+		panic(err)
+	}
+	defer pprof.StopCPUProfile()
+
+	started := time.Now()
+	fmt.Println(process())
+	fmt.Printf("%0.6f\n", time.Since(started).Seconds())
 }
 
 func process() string {
